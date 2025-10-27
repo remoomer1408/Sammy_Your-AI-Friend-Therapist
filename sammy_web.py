@@ -402,4 +402,25 @@ with st.sidebar:
     st.header("Session Info")
     st.write(f"Messages in session: {len(st.session_state.messages)}")
     st.write(f"Current mode: {st.session_state.mode.title()}")
-    st.write(f"Auto-speak: {'Enabled' if
+    
+    # Fix the syntax error here - use proper string formatting
+    auto_speak_status = "Enabled" if st.session_state.auto_speak else "Disabled"
+    st.write(f"Auto-speak: {auto_speak_status}")
+    
+    # Microphone status
+    if st.session_state.microphone:
+        st.success("✅ Microphone available")
+    else:
+        st.error("❌ Microphone not available")
+    
+    if st.session_state.tts_engine:
+        st.success("✅ Text-to-speech available")
+    else:
+        st.warning("⚠️ Text-to-speech not available")
+
+# Installation requirements note
+st.sidebar.markdown("---")
+st.sidebar.info("""
+**Required packages:**
+```bash
+pip install speechrecognition pyttsx3 pyaudio
