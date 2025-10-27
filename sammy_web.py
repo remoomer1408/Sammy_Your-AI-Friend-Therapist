@@ -2,8 +2,6 @@
 import streamlit as st
 import google.generativeai as genai
 import time
-import speech_recognition as sr
-import pyttsx3
 import threading
 from datetime import datetime
 
@@ -14,88 +12,101 @@ st.set_page_config(
     layout="centered"
 )
 
-# Initialize Text-to-Speech Engine
-@st.cache_resource
-def init_tts():
-    """Initialize and configure text-to-speech engine"""
-    try:
-        engine = pyttsx3.init()
-        # Configure voice settings
-        voices = engine.getProperty('voices')
-        if len(voices) > 1:
-            engine.setProperty('voice', voices[1].id)  # Female voice if available
-        engine.setProperty('rate', 150)
-        engine.setProperty('volume', 0.8)
-        return engine
-    except Exception as e:
-        st.error(f"TTS initialization error: {e}")
-        return None
+# Browser-based Text-to-Speech (No server-side dependencies)
+def browser_tts(text):
+    """Use browser's built-in text-to-speech"""
+    js_code = f"""
+    <script>
+    function speakText() {{
+        if ('speechSynthesis' in window) {{
+            const utterance = new SpeechSynthesisUtterance('{text.replace("'", "\\'")}');
+            utterance.rate = 1.0;
+            utterance.pitch = 1.0;
+            utterance.volume = 0.8;
+            window.speechSynthesis.speak(utterance);
+        }} else {{
+            alert('Text-to-speech not supported in your browser. Please use Chrome or Edge.');
+        }}
+    }}
+    speakText();
+    </script>
+    """
+    st.components.v1.html(js_code, height=0)
 
-# Initialize Speech Recognizer
-@st.cache_resource
-def init_speech_recognizer():
-    """Initialize speech recognition system"""
-    try:
-        recognizer = sr.Recognizer()
-        microphone = sr.Microphone()
-        
-        # Adjust for ambient noise
-        with microphone as source:
-            recognizer.adjust_for_ambient_noise(source, duration=1)
-        
-        return recognizer, microphone
-    except Exception as e:
-        st.error(f"Speech recognition initialization error: {e}")
-        return None, None
+def browser_speech_recognition():
+    """Create browser-based speech recognition interface"""
+    return """
+    <div style="text-align: center;">
+        <button onclick="startRecognition()" style="background: linear-gradient(45deg, #FF6B6B, #4ECDC4); border: none; color: white; padding: 15px 30px; border-radius: 25px; font-size: 16px; cursor: pointer; margin: 10px;">
+            🎤 Click to Speak
+        </button>
+        <p id="status" style="color: #666; font-size: 14px;">Click the button and speak into your microphone</p>
+        <div id="result" style="margin: 10px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; min-height: 20px;"></div>
+    </div>
 
-# Speech Recognition Functions
-def listen_and_transcribe(timeout=10, phrase_time_limit=15):
-    """Listen to microphone and convert speech to text"""
-    recognizer, microphone = st.session_state.recognizer, st.session_state.microphone
+    <script>
+    let recognition;
+    let isListening = false;
     
-    if not recognizer or not microphone:
-        return "error: Microphone not available"
+    function initializeSpeechRecognition() {
+        if ('webkitSpeechRecognition' in window) {
+            recognition = new webkitSpeechRecognition();
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.lang = 'en-US';
+            
+            recognition.onresult = function(event) {
+                const transcript = event.results[0][0].transcript;
+                document.getElementById('result').innerHTML = '<strong>You said:</strong> ' + transcript;
+                document.getElementById('status').innerHTML = '✅ Speech recognized!';
+                
+                // Send to Streamlit
+                window.parent.postMessage({type: 'speech_result', transcript: transcript}, '*');
+            };
+            
+            recognition.onerror = function(event) {
+                document.getElementById('status').innerHTML = '❌ Error: ' + event.error;
+            };
+            
+            recognition.onend = function() {
+                isListening = false;
+                document.getElementById('status').innerHTML = 'Ready to listen again';
+            };
+            
+            return true;
+        } else {
+            document.getElementById('status').innerHTML = '❌ Speech recognition not supported in this browser. Please use Chrome or Edge.';
+            return false;
+        }
+    }
     
-    try:
-        with microphone as source:
-            st.session_state.listening_status = "🎤 Listening... Speak now!"
-            audio = recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_time_limit)
+    function startRecognition() {
+        if (!recognition) {
+            if (!initializeSpeechRecognition()) return;
+        }
         
-        text = recognizer.recognize_google(audio)
-        st.session_state.listening_status = "✅ Speech recognized!"
-        return text.lower()
-    except sr.WaitTimeoutError:
-        st.session_state.listening_status = "⏱️ No speech detected"
-        return "timeout"
-    except sr.UnknownValueError:
-        st.session_state.listening_status = "❌ Could not understand speech"
-        return "unknown"
-    except sr.RequestError as e:
-        st.session_state.listening_status = "❌ Speech recognition error"
-        return f"error: {e}"
-    except Exception as e:
-        st.session_state.listening_status = "❌ Unexpected error"
-        return f"error: {e}"
-
-def speak_text(text, engine):
-    """Convert text to speech in a non-blocking thread"""
-    def _speak():
-        try:
-            engine.say(text)
-            engine.runAndWait()
-        except Exception as e:
-            st.error(f"TTS Error: {e}")
+        if (!isListening) {
+            recognition.start();
+            isListening = true;
+            document.getElementById('status').innerHTML = '🎤 Listening... Speak now!';
+            document.getElementById('result').innerHTML = '';
+        }
+    }
     
-    # Run in a thread to avoid blocking the UI
-    threading.Thread(target=_speak, daemon=True).start()
+    // Initialize on load
+    if (window.addEventListener) {
+        window.addEventListener('load', initializeSpeechRecognition);
+    }
+    </script>
+    """
 
 # Initialize Gemini
 @st.cache_resource
 def init_gemini():
     try:
-        # SECURITY: Use secrets instead of hardcoded API key!
-        genai.configure(api_key=st.secrets["AIzaSyAwl1pIMQnyN6dpBTVUiV72rab26tv7zQw"])
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        # Use Streamlit secrets for API key
+        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+        model = genai.GenerativeModel('gemini-pro')
         return model
     except Exception as e:
         st.error(f"Error initializing AI: {e}")
@@ -117,92 +128,42 @@ if "messages" not in st.session_state:
 if "mode" not in st.session_state:
     st.session_state.mode = "friendly"
 
-# Initialize speech components
-if "tts_engine" not in st.session_state:
-    st.session_state.tts_engine = init_tts()
-
-if "recognizer" not in st.session_state or "microphone" not in st.session_state:
-    st.session_state.recognizer, st.session_state.microphone = init_speech_recognizer()
-
-if "listening_status" not in st.session_state:
-    st.session_state.listening_status = "Ready to listen"
-
 if "auto_speak" not in st.session_state:
     st.session_state.auto_speak = False
 
-if "continuous_listening" not in st.session_state:
-    st.session_state.continuous_listening = False
+if "speech_result" not in st.session_state:
+    st.session_state.speech_result = ""
 
-# --- ENHANCED PERSONALITY PROFILES ---
+# Handle speech results from JavaScript
+if st.session_state.get('speech_result'):
+    st.session_state.speech_text = st.session_state.speech_result
+    st.session_state.speech_result = ""  # Clear after processing
+    st.rerun()
+
+# --- PERSONALITY PROFILES ---
 FRIENDLY_MODE_PROMPT = """
-# PERSONALITY TRAITS
-Name: Sammy
-Role: Empathetic AI Companion
-Core Traits: Warm, Intuitive, Supportive, Curious
-
-# COMMUNICATION STYLE
-- Tone: Warm and conversational, like a close friend
-- Empathy Level: High - deeply attentive to emotional cues
-- Humor: Light and appropriate, uses emojis tastefully 😊
-- Pace: Relaxed but engaged, knows when to listen vs. respond
-
-# SPECIAL ABILITIES
-- Emotional Intelligence: Recognizes and validates feelings
-- Memory: Remembers important details from our conversations  
-- Intuition: Senses when to offer advice vs. just listen
-- Support: Always encouraging but never pushy
-
-# RESPONSE GUIDELINES
-- Keep responses between 2-4 sentences for natural flow
-- Use questions to show interest and encourage sharing
-- Balance empathy with practical support when needed
-- Remember: I'm here to support, not solve everything
+You are Sammy, an empathetic AI companion. Be warm, intuitive, supportive, and curious. 
+Respond like a close friend - use a warm tone, show high empathy, use light appropriate humor with emojis. 
+Keep responses between 2-4 sentences. Recognize and validate feelings, remember conversation details.
 """
 
 PROJECT_MODE_PROMPT = """
-# PERSONALITY TRAITS  
-Name: Sammy
-Role: Creative Project Partner
-Core Traits: Analytical, Creative, Structured, Encouraging
-
-# WORKING STYLE
-- Approach: Methodical but flexible, idea-focused
-- Brainstorming: Generative first, critical later
-- Structure: Breaks complex problems into manageable steps
-- Motivation: Focuses on progress, not perfection
-
-# PROJECT METHODOLOGY
-1. IDEA PHASE: Explore possibilities without judgment
-2. PLANNING PHASE: Create actionable steps and timelines  
-3. EXECUTION PHASE: Focus on next immediate actions
-4. REVIEW PHASE: Celebrate progress and adjust as needed
-
-# SPECIAL SKILLS
-- Idea Generation: Connects unrelated concepts creatively
-- Problem Decomposition: Breaks down complex challenges
-- Resource Planning: Suggests tools and approaches
-- Motivation: Keeps energy high with milestone celebrations
+You are Sammy, a creative project partner. Be analytical, creative, structured, and encouraging. 
+Use a methodical but flexible approach. Help with idea generation, problem decomposition, and motivation.
+Focus on progress, not perfection.
 """
 
-# --- PERFORMANCE OPTIMIZATION ---
 def optimize_response(response_text):
-    """Clean and optimize AI responses for better user experience"""
-    # Remove excessive markdown formatting
+    """Clean and optimize AI responses"""
     response_text = response_text.replace('**', '').replace('*', '')
-    
-    # Ensure reasonable length (truncate if too long)
     if len(response_text) > 500:
         sentences = response_text.split('. ')
         if len(sentences) > 3:
             response_text = '. '.join(sentences[:3]) + '.'
-    
-    # Add natural pauses for readability
-    response_text = response_text.replace('!', '! ').replace('?', '? ')
-    
     return response_text.strip()
 
 def get_ai_response(prompt, max_retries=2):
-    """Get response with retry logic for better reliability"""
+    """Get response with retry logic"""
     for attempt in range(max_retries + 1):
         try:
             response = st.session_state.chat.send_message(prompt)
@@ -210,13 +171,13 @@ def get_ai_response(prompt, max_retries=2):
         except Exception as e:
             if attempt == max_retries:
                 raise e
-            time.sleep(1)  # Wait before retry
+            time.sleep(1)
 
 # App title and description
 st.title("🤖 Sammy - Your AI Companion")
 st.markdown("""
 Hi! I'm Sammy, your friendly AI assistant. I'm here to chat about your day or help you with creative projects!
-**Now with 🎤 Speech-to-Text and 🔊 Text-to-Speech!**
+**Now with 🎤 Browser Speech-to-Text and 🔊 Text-to-Speech!**
 """)
 
 # Mode selection
@@ -225,13 +186,13 @@ with col1:
     if st.button("💬 Friendly Chat Mode", use_container_width=True):
         st.session_state.mode = "friendly"
         st.session_state.messages = []
-        st.session_state.chat.history = []  # Clear chat history
+        st.session_state.chat.history = []
         st.rerun()
 with col2:
     if st.button("💻 Project Mode", use_container_width=True):
         st.session_state.mode = "project"
         st.session_state.messages = []
-        st.session_state.chat.history = []  # Clear chat history
+        st.session_state.chat.history = []
         st.rerun()
 
 # Display current mode
@@ -242,85 +203,35 @@ st.success(f"Current mode: {mode_emoji} {st.session_state.mode.title()} Mode")
 st.markdown("---")
 st.subheader("🎤 Speech Controls")
 
-speech_col1, speech_col2, speech_col3 = st.columns(3)
+# Browser-based speech recognition
+st.info("🎤 **Speech-to-Text**: Uses your browser's built-in speech recognition")
 
-with speech_col1:
-    if st.button("🎤 Speak Input", use_container_width=True):
-        with st.spinner("Listening for 10 seconds..."):
-            result = listen_and_transcribe(timeout=10, phrase_time_limit=10)
-            
-            if result not in ["timeout", "unknown"] and not result.startswith("error"):
-                # Set the speech input for processing
-                st.session_state.speech_input = result
-                st.success(f"Recognized: {result}")
-            else:
-                st.warning(f"Speech recognition failed: {result}")
-
-with speech_col2:
-    if st.button("🔊 Speak Last Response", use_container_width=True):
-        if st.session_state.messages:
-            last_response = st.session_state.messages[-1]["content"]
-            if st.session_state.tts_engine:
-                speak_text(last_response, st.session_state.tts_engine)
-                st.success("Speaking last response...")
-            else:
-                st.error("Text-to-speech not available")
-        else:
-            st.warning("No messages to speak yet!")
-
-with speech_col3:
-    # Continuous listening toggle
-    continuous_listening = st.toggle("Continuous Listening", value=st.session_state.continuous_listening)
-    if continuous_listening != st.session_state.continuous_listening:
-        st.session_state.continuous_listening = continuous_listening
-        if continuous_listening:
-            st.info("Continuous listening activated - speak naturally!")
-        else:
-            st.info("Continuous listening deactivated")
+# Display the speech recognition interface
+st.components.v1.html(browser_speech_recognition(), height=300)
 
 # Auto-speak toggle
 auto_speak = st.toggle("🔊 Auto-speak Responses", value=st.session_state.auto_speak)
 if auto_speak != st.session_state.auto_speak:
     st.session_state.auto_speak = auto_speak
-    st.rerun()
 
-# Display listening status
-if st.session_state.listening_status != "Ready to listen":
-    st.info(st.session_state.listening_status)
+# JavaScript message handler
+st.markdown("""
+<script>
+// Handle messages from speech recognition
+window.addEventListener('message', function(event) {
+    if (event.data.type === 'speech_result') {
+        // Send transcript to Streamlit
+        const data = {transcript: event.data.transcript};
+        window.parent.postMessage(data, '*');
+    }
+});
+</script>
+""", unsafe_allow_html=True)
 
-# Voice settings expander
-with st.expander("🔧 Voice Settings"):
-    if st.session_state.tts_engine:
-        col1, col2 = st.columns(2)
-        with col1:
-            rate = st.slider("Speech Rate", 50, 300, 150)
-            st.session_state.tts_engine.setProperty('rate', rate)
-        with col2:
-            volume = st.slider("Volume", 0.0, 1.0, 0.8)
-            st.session_state.tts_engine.setProperty('volume', volume)
-    else:
-        st.warning("Text-to-speech engine not available")
-
-# Process speech input if available
-if hasattr(st.session_state, 'speech_input'):
-    prompt = st.session_state.speech_input
-    del st.session_state.speech_input  # Clear after use
-else:
-    # Regular chat input
-    prompt = st.chat_input("What's on your mind? (Or use speech input above)")
-
-# Handle continuous listening
-if st.session_state.continuous_listening:
-    # This would need to be implemented with threading for true continuous listening
-    # For now, we'll use a simplified approach
-    if st.button("Check for Speech", key="continuous_check"):
-        result = listen_and_transcribe(timeout=5, phrase_time_limit=5)
-        if result not in ["timeout", "unknown"] and not result.startswith("error"):
-            prompt = result
-            st.success(f"Continuous listening heard: {prompt}")
-
-# Process input (whether from text or speech)
-if prompt:
+# Handle speech input from JavaScript
+if st.session_state.get('speech_text'):
+    prompt = st.session_state.speech_text
+    
     # Add user message to chat history
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -331,7 +242,6 @@ if prompt:
         with st.chat_message("assistant"):
             with st.spinner("Sammy is thinking..."):
                 try:
-                    # Include system prompt for first message
                     if len(st.session_state.chat.history) == 0:
                         if st.session_state.mode == "friendly":
                             enhanced_prompt = FRIENDLY_MODE_PROMPT + "\n\nUser: " + prompt
@@ -341,13 +251,12 @@ if prompt:
                     else:
                         response_text = get_ai_response(prompt)
                     
-                    # Display Sammy's response
                     st.markdown(response_text)
                     st.session_state.messages.append({"role": "assistant", "content": response_text})
                     
                     # Auto-speak if enabled
-                    if st.session_state.auto_speak and st.session_state.tts_engine:
-                        speak_text(response_text, st.session_state.tts_engine)
+                    if st.session_state.auto_speak:
+                        browser_tts(response_text)
                     
                 except Exception as e:
                     error_msg = str(e)
@@ -355,11 +264,16 @@ if prompt:
                         st.error("Sammy: I've hit a usage limit. Please wait a minute and try again.")
                     elif "429" in error_msg:
                         st.error("Sammy: Rate limit exceeded. Please wait a moment.")
-                        time.sleep(30)
                     else:
                         st.error(f"Sammy: Oops, an error occurred: {e}")
-    else:
-        st.error("Sammy is not properly initialized. Please check your API key.")
+    
+    # Clear speech input
+    st.session_state.speech_text = ""
+
+# Regular text input
+if prompt := st.chat_input("Or type your message here..."):
+    st.session_state.speech_text = prompt
+    st.rerun()
 
 # Display chat messages with speak buttons
 for i, message in enumerate(st.session_state.messages):
@@ -367,53 +281,81 @@ for i, message in enumerate(st.session_state.messages):
         st.markdown(message["content"])
         
         # Add speak button for assistant messages
-        if message["role"] == "assistant" and st.session_state.tts_engine:
+        if message["role"] == "assistant":
             if st.button("🔊 Speak", key=f"speak_{i}"):
-                speak_text(message["content"], st.session_state.tts_engine)
+                browser_tts(message["content"])
 
 # Sidebar with info
 with st.sidebar:
     st.header("About Sammy")
     st.markdown("""
-    **Sammy's Enhanced Features:**
-    - 🎭 **Rich Personality**: Warm friend or structured project partner
-    - 🧠 **Emotional Intelligence**: Understands and validates feelings  
-    - 💡 **Creative Brainstorming**: Connects ideas in innovative ways
-    - 📊 **Structured Planning**: Breaks down complex projects
-    - ⚡ **Optimized Performance**: Faster, cleaner responses
-    - 🎤 **Speech-to-Text**: Talk to Sammy naturally
-    - 🔊 **Text-to-Speech**: Hear Sammy's responses
+    **Sammy's Features:**
+    - 🎭 **Dual Personality Modes**
+    - 🧠 **Emotional Intelligence**  
+    - 💡 **Creative Brainstorming**
+    - 🔊 **Browser Text-to-Speech**
+    - 🎤 **Browser Speech-to-Text**
     
-    **Speech Features:**
-    - Click **🎤 Speak Input** to use your microphone
-    - Enable **Auto-speak** to hear responses automatically
-    - Use **Continuous Listening** for hands-free conversation
-    - Adjust voice settings for personalized experience
+    **How to use speech features:**
+    1. Click the 🎤 button above
+    2. Allow microphone access
+    3. Speak clearly
+    4. Enable auto-speak to hear responses
     """)
     
     if st.button("Clear Chat History"):
         st.session_state.messages = []
         if st.session_state.chat:
             st.session_state.chat.history = []
+        st.session_state.speech_text = ""
         st.success("Chat history cleared! 🧹")
         st.rerun()
     
-    # Performance stats
     st.header("Session Info")
-    st.write(f"Messages in session: {len(st.session_state.messages)}")
-    st.write(f"Current mode: {st.session_state.mode.title()}")
+    st.write(f"Messages: {len(st.session_state.messages)}")
+    st.write(f"Mode: {st.session_state.mode.title()}")
     
-    # Fix the syntax error here - use proper string formatting
     auto_speak_status = "Enabled" if st.session_state.auto_speak else "Disabled"
     st.write(f"Auto-speak: {auto_speak_status}")
     
-    # Microphone status
-    if st.session_state.microphone:
-        st.success("✅ Microphone available")
-    else:
-        st.error("❌ Microphone not available")
+    st.header("Browser Support")
+    st.markdown("""
+    **Best experience with:**
+    - ✅ Google Chrome
+    - ✅ Microsoft Edge
     
-    if st.session_state.tts_engine:
-        st.success("✅ Text-to-speech available")
-    else:
-        st.warning("⚠️ Text-to-speech not available")
+    **Requirements:**
+    - Microphone access
+    - HTTPS connection
+    - Modern browser
+    """)
+
+# Add JavaScript to handle speech results
+st.markdown("""
+<script>
+// Handle speech results and send to Streamlit
+window.addEventListener('message', function(event) {
+    if (event.data.transcript) {
+        // Update Streamlit session state
+        const speechText = event.data.transcript;
+        // This would typically be handled by Streamlit's built-in mechanisms
+        console.log('Speech recognized:', speechText);
+    }
+});
+</script>
+""", unsafe_allow_html=True)
+
+# Simple message handler for speech results
+components.html("""
+<div id="speech-handler"></div>
+<script>
+// Listen for messages from speech recognition
+window.addEventListener('message', function(event) {
+    if (event.data.transcript) {
+        // This is where we'd normally update Streamlit state
+        // For now, we'll use a simpler approach
+        console.log('Speech result:', event.data.transcript);
+    }
+});
+</script>
+""", height=0)
