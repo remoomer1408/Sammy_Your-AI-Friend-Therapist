@@ -144,9 +144,9 @@ If you encounter any issues:
 
 ## 📞 Contact
 
-**Your Name** 
-- GitHub: [@yourusername](https://github.com/yourusername)
-- Email: your.email@example.com
+**Your Na[me** 
+- GitHub:(https://github.com/remoomer1408)](https://github.com/remoomer1408)
+- Email: anindya@mytellify.com / anindya.chakrabarty96@gmail.com
 
 ---
 
