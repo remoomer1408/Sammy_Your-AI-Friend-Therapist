@@ -417,10 +417,3 @@ with st.sidebar:
         st.success("✅ Text-to-speech available")
     else:
         st.warning("⚠️ Text-to-speech not available")
-
-# Installation requirements note
-st.sidebar.markdown("---")
-st.sidebar.info("""
-**Required packages:**
-```bash
-pip install speechrecognition pyttsx3 pyaudio
