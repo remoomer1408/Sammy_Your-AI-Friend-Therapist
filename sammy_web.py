@@ -2,8 +2,6 @@
 import streamlit as st
 import google.generativeai as genai
 import time
-import threading
-from datetime import datetime
 
 # Page configuration
 st.set_page_config(
@@ -15,17 +13,19 @@ st.set_page_config(
 # Browser-based Text-to-Speech (No server-side dependencies)
 def browser_tts(text):
     """Use browser's built-in text-to-speech"""
+    # Clean text for JavaScript
+    clean_text = text.replace("'", "\\'").replace('"', '\\"').replace('\n', ' ')
     js_code = f"""
     <script>
     function speakText() {{
         if ('speechSynthesis' in window) {{
-            const utterance = new SpeechSynthesisUtterance('{text.replace("'", "\\'")}');
+            const utterance = new SpeechSynthesisUtterance('{clean_text}');
             utterance.rate = 1.0;
             utterance.pitch = 1.0;
             utterance.volume = 0.8;
             window.speechSynthesis.speak(utterance);
         }} else {{
-            alert('Text-to-speech not supported in your browser. Please use Chrome or Edge.');
+            console.log('Text-to-speech not supported in your browser.');
         }}
     }}
     speakText();
@@ -36,12 +36,12 @@ def browser_tts(text):
 def browser_speech_recognition():
     """Create browser-based speech recognition interface"""
     return """
-    <div style="text-align: center;">
+    <div style="text-align: center; padding: 20px;">
         <button onclick="startRecognition()" style="background: linear-gradient(45deg, #FF6B6B, #4ECDC4); border: none; color: white; padding: 15px 30px; border-radius: 25px; font-size: 16px; cursor: pointer; margin: 10px;">
             🎤 Click to Speak
         </button>
         <p id="status" style="color: #666; font-size: 14px;">Click the button and speak into your microphone</p>
-        <div id="result" style="margin: 10px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; min-height: 20px;"></div>
+        <div id="result" style="margin: 10px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; min-height: 20px; background: #f9f9f9;"></div>
     </div>
 
     <script>
@@ -60,12 +60,23 @@ def browser_speech_recognition():
                 document.getElementById('result').innerHTML = '<strong>You said:</strong> ' + transcript;
                 document.getElementById('status').innerHTML = '✅ Speech recognized!';
                 
-                // Send to Streamlit
-                window.parent.postMessage({type: 'speech_result', transcript: transcript}, '*');
+                // Create a form to submit to Streamlit
+                const form = document.createElement('form');
+                form.method = 'POST';
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'speech_text';
+                input.value = transcript;
+                form.appendChild(input);
+                document.body.appendChild(form);
+                
+                // Submit the form
+                form.submit();
             };
             
             recognition.onerror = function(event) {
                 document.getElementById('status').innerHTML = '❌ Error: ' + event.error;
+                document.getElementById('result').innerHTML = 'Please try again or use text input.';
             };
             
             recognition.onend = function() {
@@ -94,18 +105,40 @@ def browser_speech_recognition():
     }
     
     // Initialize on load
-    if (window.addEventListener) {
-        window.addEventListener('load', initializeSpeechRecognition);
-    }
+    window.addEventListener('load', initializeSpeechRecognition);
     </script>
     """
 
-# Initialize Gemini
+# Initialize Gemini with proper error handling
 @st.cache_resource
 def init_gemini():
     try:
-        # Use Streamlit secrets for API key
-        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+        # Try multiple ways to get the API key
+        api_key = None
+        
+        # Method 1: Streamlit secrets
+        try:
+            api_key = st.secrets["GOOGLE_API_KEY"]
+        except:
+            pass
+        
+        # Method 2: Try alternative secret name
+        if not api_key:
+            try:
+                api_key = st.secrets["GEMINI_API_KEY"]
+            except:
+                pass
+        
+        # Method 3: Try environment variable as fallback
+        if not api_key:
+            import os
+            api_key = os.getenv("GOOGLE_API_KEY")
+        
+        if not api_key:
+            st.error("🔑 API Key not found. Please add your Google API key to Streamlit secrets.")
+            return None
+            
+        genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-pro')
         return model
     except Exception as e:
@@ -131,14 +164,11 @@ if "mode" not in st.session_state:
 if "auto_speak" not in st.session_state:
     st.session_state.auto_speak = False
 
-if "speech_result" not in st.session_state:
-    st.session_state.speech_result = ""
-
-# Handle speech results from JavaScript
-if st.session_state.get('speech_result'):
-    st.session_state.speech_text = st.session_state.speech_result
-    st.session_state.speech_result = ""  # Clear after processing
-    st.rerun()
+# Handle form submissions for speech input
+if st.session_state.get('speech_text'):
+    prompt = st.session_state.speech_text
+else:
+    prompt = None
 
 # --- PERSONALITY PROFILES ---
 FRIENDLY_MODE_PROMPT = """
@@ -180,65 +210,62 @@ Hi! I'm Sammy, your friendly AI assistant. I'm here to chat about your day or he
 **Now with 🎤 Browser Speech-to-Text and 🔊 Text-to-Speech!**
 """)
 
-# Mode selection
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("💬 Friendly Chat Mode", use_container_width=True):
-        st.session_state.mode = "friendly"
-        st.session_state.messages = []
-        st.session_state.chat.history = []
-        st.rerun()
-with col2:
-    if st.button("💻 Project Mode", use_container_width=True):
-        st.session_state.mode = "project"
-        st.session_state.messages = []
-        st.session_state.chat.history = []
-        st.rerun()
+# Show API key status
+if not st.session_state.model:
+    st.warning("""
+    **API Key Setup Required:**
+    1. Go to [Streamlit Cloud](https://share.streamlit.io/)
+    2. Click on your app → Settings (⋮) → Secrets
+    3. Add your Google API key:
+    ```toml
+    GOOGLE_API_KEY = "your_actual_api_key_here"
+    ```
+    4. Redeploy the app
+    """)
 
-# Display current mode
-mode_emoji = "💬" if st.session_state.mode == "friendly" else "💻"
-st.success(f"Current mode: {mode_emoji} {st.session_state.mode.title()} Mode")
+# Mode selection (only show if AI is initialized)
+if st.session_state.model:
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("💬 Friendly Chat Mode", use_container_width=True):
+            st.session_state.mode = "friendly"
+            st.session_state.messages = []
+            st.session_state.chat.history = []
+            st.rerun()
+    with col2:
+        if st.button("💻 Project Mode", use_container_width=True):
+            st.session_state.mode = "project"
+            st.session_state.messages = []
+            st.session_state.chat.history = []
+            st.rerun()
 
-# Speech Controls Section
-st.markdown("---")
-st.subheader("🎤 Speech Controls")
+    # Display current mode
+    mode_emoji = "💬" if st.session_state.mode == "friendly" else "💻"
+    st.success(f"Current mode: {mode_emoji} {st.session_state.mode.title()} Mode")
 
-# Browser-based speech recognition
-st.info("🎤 **Speech-to-Text**: Uses your browser's built-in speech recognition")
+    # Speech Controls Section
+    st.markdown("---")
+    st.subheader("🎤 Speech Controls")
 
-# Display the speech recognition interface
-st.components.v1.html(browser_speech_recognition(), height=300)
+    # Browser-based speech recognition
+    st.info("🎤 **Speech-to-Text**: Uses your browser's built-in speech recognition (Chrome/Edge recommended)")
 
-# Auto-speak toggle
-auto_speak = st.toggle("🔊 Auto-speak Responses", value=st.session_state.auto_speak)
-if auto_speak != st.session_state.auto_speak:
-    st.session_state.auto_speak = auto_speak
+    # Display the speech recognition interface
+    st.components.v1.html(browser_speech_recognition(), height=250)
 
-# JavaScript message handler
-st.markdown("""
-<script>
-// Handle messages from speech recognition
-window.addEventListener('message', function(event) {
-    if (event.data.type === 'speech_result') {
-        // Send transcript to Streamlit
-        const data = {transcript: event.data.transcript};
-        window.parent.postMessage(data, '*');
-    }
-});
-</script>
-""", unsafe_allow_html=True)
+    # Auto-speak toggle
+    auto_speak = st.toggle("🔊 Auto-speak Responses", value=st.session_state.auto_speak)
+    if auto_speak != st.session_state.auto_speak:
+        st.session_state.auto_speak = auto_speak
 
-# Handle speech input from JavaScript
-if st.session_state.get('speech_text'):
-    prompt = st.session_state.speech_text
-    
-    # Add user message to chat history
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    # Handle speech input
+    if prompt:
+        # Add user message to chat history
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
 
-    # Generate Sammy's response
-    if st.session_state.chat:
+        # Generate Sammy's response
         with st.chat_message("assistant"):
             with st.spinner("Sammy is thinking..."):
                 try:
@@ -266,24 +293,24 @@ if st.session_state.get('speech_text'):
                         st.error("Sammy: Rate limit exceeded. Please wait a moment.")
                     else:
                         st.error(f"Sammy: Oops, an error occurred: {e}")
-    
-    # Clear speech input
-    st.session_state.speech_text = ""
-
-# Regular text input
-if prompt := st.chat_input("Or type your message here..."):
-    st.session_state.speech_text = prompt
-    st.rerun()
-
-# Display chat messages with speak buttons
-for i, message in enumerate(st.session_state.messages):
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
         
-        # Add speak button for assistant messages
-        if message["role"] == "assistant":
-            if st.button("🔊 Speak", key=f"speak_{i}"):
-                browser_tts(message["content"])
+        # Clear speech input
+        st.session_state.speech_text = ""
+
+    # Regular text input
+    if text_prompt := st.chat_input("Or type your message here..."):
+        st.session_state.speech_text = text_prompt
+        st.rerun()
+
+    # Display chat messages with speak buttons
+    for i, message in enumerate(st.session_state.messages):
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+            
+            # Add speak button for assistant messages
+            if message["role"] == "assistant":
+                if st.button("🔊 Speak", key=f"speak_{i}"):
+                    browser_tts(message["content"])
 
 # Sidebar with info
 with st.sidebar:
@@ -307,16 +334,20 @@ with st.sidebar:
         st.session_state.messages = []
         if st.session_state.chat:
             st.session_state.chat.history = []
-        st.session_state.speech_text = ""
+        if 'speech_text' in st.session_state:
+            st.session_state.speech_text = ""
         st.success("Chat history cleared! 🧹")
         st.rerun()
     
     st.header("Session Info")
     st.write(f"Messages: {len(st.session_state.messages)}")
-    st.write(f"Mode: {st.session_state.mode.title()}")
-    
-    auto_speak_status = "Enabled" if st.session_state.auto_speak else "Disabled"
-    st.write(f"Auto-speak: {auto_speak_status}")
+    if st.session_state.model:
+        st.write(f"Mode: {st.session_state.mode.title()}")
+        
+        auto_speak_status = "Enabled" if st.session_state.auto_speak else "Disabled"
+        st.write(f"Auto-speak: {auto_speak_status}")
+    else:
+        st.write("Status: ❌ API Key Needed")
     
     st.header("Browser Support")
     st.markdown("""
@@ -330,32 +361,14 @@ with st.sidebar:
     - Modern browser
     """)
 
-# Add JavaScript to handle speech results
+# Simple JavaScript for speech handling
 st.markdown("""
 <script>
-// Handle speech results and send to Streamlit
+// Handle speech results
 window.addEventListener('message', function(event) {
-    if (event.data.transcript) {
-        // Update Streamlit session state
-        const speechText = event.data.transcript;
-        // This would typically be handled by Streamlit's built-in mechanisms
-        console.log('Speech recognized:', speechText);
+    if (event.data.type === 'speech_result') {
+        console.log('Speech result received');
     }
 });
 </script>
 """, unsafe_allow_html=True)
-
-# Simple message handler for speech results
-components.html("""
-<div id="speech-handler"></div>
-<script>
-// Listen for messages from speech recognition
-window.addEventListener('message', function(event) {
-    if (event.data.transcript) {
-        // This is where we'd normally update Streamlit state
-        // For now, we'll use a simpler approach
-        console.log('Speech result:', event.data.transcript);
-    }
-});
-</script>
-""", height=0)
