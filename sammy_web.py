@@ -1,7 +1,7 @@
 # filename: sammy_web.py
 import streamlit as st
-import google.generativeai as genai
 import time
+import random
 
 # Page configuration
 st.set_page_config(
@@ -15,79 +15,101 @@ def speak_text(text):
     """Use browser's text-to-speech"""
     # Clean the text for JavaScript
     import re
-    clean_text = re.sub(r'[^\w\s\.\?\!,]', '', text)  # Remove special characters
+    clean_text = re.sub(r'[^\w\s\.\?\!,]', '', text)
     clean_text = clean_text.replace("'", "\\'").replace('"', '\\"').replace('\n', ' ')
     
     js_code = f"""
     <script>
     function speak() {{
         if ('speechSynthesis' in window) {{
-            // Stop any current speech
             window.speechSynthesis.cancel();
-            
             const utterance = new SpeechSynthesisUtterance('{clean_text}');
             utterance.rate = 0.8;
             utterance.pitch = 1.0;
             utterance.volume = 0.8;
-            utterance.lang = 'en-US';
-            
             window.speechSynthesis.speak(utterance);
         }}
     }}
-    // Execute after a short delay
     setTimeout(speak, 100);
     </script>
     """
     st.components.v1.html(js_code, height=0)
 
-# Initialize Gemini with correct model names
-@st.cache_resource
-def init_gemini():
-    try:
-        api_key = st.secrets.get("GOOGLE_API_KEY")
-        if not api_key:
-            st.error("❌ API Key not found. Add GOOGLE_API_KEY to Streamlit secrets.")
-            return None
-            
-        genai.configure(api_key=api_key)
+# Rule-based Sammy responses (no API needed)
+def get_sammy_response(user_message, mode, conversation_history):
+    """Generate responses based on rules and patterns"""
+    
+    user_message_lower = user_message.lower()
+    
+    # Friendly mode responses
+    friendly_responses = {
+        # Greetings
+        'hello': ["Hi there! 😊 How are you doing today?", "Hello! It's great to hear from you! What's on your mind?"],
+        'hi': ["Hey! 👋 How's your day going?", "Hi there! Nice to chat with you!"],
+        'hey': ["Hey! What's up? 😄", "Hey there! How can I help you today?"],
         
-        # Try different model names - these are the most common ones
-        model_attempts = [
-            'gemini-1.5-flash',  # Most common new model
-            'gemini-1.5-pro',    # Another common new model
-            'gemini-1.0-pro',    # Older but stable
-            'gemini-pro',        # Original name (might not work)
+        # How are you
+        'how are you': ["I'm doing great, thanks for asking! Just here ready to chat with you. 😊", "I'm wonderful! How about you? How's your day going?"],
+        
+        # Feelings/emotions
+        'sad': ["I'm sorry you're feeling sad. 💙 Remember that feelings are temporary and it's okay to not be okay. Want to talk about what's bothering you?", "I'm here for you. Sometimes just talking about what's making us sad can help. Would you like to share?"],
+        'happy': ["That's wonderful! 😄 I'm so glad you're feeling happy! What's making you smile today?", "Yay! Happiness is contagious! Tell me more about what's bringing you joy!"],
+        'stressed': ["I understand stress can be overwhelming. 🧘 Try taking a deep breath with me. Remember to take things one step at a time.", "Stress is tough. Sometimes breaking things down into smaller tasks can help. What's specifically stressing you out?"],
+        'anxious': ["Anxiety can be challenging. 🌸 Remember to breathe deeply. You're stronger than you think, and this feeling will pass.", "I'm here with you. Try naming 3 things you can see around you - it can help ground you in the moment."],
+        
+        # Questions about Sammy
+        'who are you': ["I'm Sammy! 🤖 Your friendly AI companion here to chat, listen, and support you. Think of me as your digital friend!", "I'm Sammy - created to be a good listener and supportive friend. I'm here whenever you need someone to talk to!"],
+        'what can you do': ["I can chat with you about your day, help you process feelings, or just keep you company! I'm a good listener. 😊", "I'm here to listen, offer support, and chat about anything on your mind. No judgment, just friendly conversation!"],
+        
+        # Default responses
+        'default': [
+            "That's interesting! Tell me more about that. 😊",
+            "I'd love to hear more about your thoughts on that!",
+            "How does that make you feel?",
+            "What's been on your mind lately?",
+            "I'm here to listen whenever you want to share! 💬",
+            "That sounds important to you. Would you like to explore that further?",
+            "Thanks for sharing that with me! What else is happening in your world?",
+            "I appreciate you opening up! How can I support you right now?",
+            "That's really thoughtful! What inspired that?",
+            "I'm listening! Feel free to share as much or as little as you'd like. 🌟"
         ]
+    }
+    
+    # Project mode responses
+    project_responses = {
+        'help': ["I'd be happy to help! What project are you working on? 🛠️", "Tell me about your project and I'll help you break it down!"],
+        'project': ["Great! Let's talk about your project. What's the main goal? 🎯", "Projects are exciting! What stage are you at currently?"],
+        'idea': ["I love brainstorming! 💡 Tell me about your idea and we can explore it together.", "New ideas are wonderful! What's sparked this one?"],
+        'stuck': ["When you're stuck, sometimes taking a break helps! 🚶 What specific part are you having trouble with?", "Let's break this down. What's the next small step you could take?"],
+        'plan': ["Planning is key! 📋 What's your timeline looking like? Let's create some milestones.", "Good planning makes execution easier. What are your main objectives?"],
         
-        for model_name in model_attempts:
-            try:
-                model = genai.GenerativeModel(model_name)
-                # Test the model with a simple prompt
-                test_response = model.generate_content("Hello")
-                st.success(f"✅ Using model: {model_name}")
-                return model
-            except Exception as e:
-                st.sidebar.info(f"❌ {model_name} not available: {str(e)[:50]}...")
-                continue
-        
-        # If no model works, show error
-        st.error("❌ No working Gemini model found. Please check your API key and model availability.")
-        return None
-        
-    except Exception as e:
-        st.error(f"Error initializing AI: {e}")
-        return None
+        'default': [
+            "Let's break that down into actionable steps! What's the first thing you need to do? 📝",
+            "That's a great starting point! What resources do you need to move forward? 🛠️",
+            "I like your approach! What's the timeline for this project? ⏰",
+            "Good thinking! What potential challenges do you foresee? 🚧",
+            "Let's create some milestones! What would success look like for this? 🎯",
+            "What's the most important priority right now? 🔥",
+            "Have you considered breaking this into smaller tasks? 📋",
+            "What support do you need to make this happen? 🤝",
+            "Let's think about the next immediate action you can take! ➡️",
+            "That's progress! What's the biggest obstacle you're facing? 🏔️"
+        ]
+    }
+    
+    # Choose response based on mode
+    responses = friendly_responses if mode == "friendly" else project_responses
+    
+    # Check for specific keywords
+    for keyword, response_list in responses.items():
+        if keyword != 'default' and keyword in user_message_lower:
+            return random.choice(response_list)
+    
+    # Use default response
+    return random.choice(responses['default'])
 
 # Initialize app state
-if "model" not in st.session_state:
-    st.session_state.model = init_gemini()
-
-if "chat" not in st.session_state:
-    if st.session_state.model:
-        st.session_state.chat = st.session_state.model.start_chat(history=[])
-    else:
-        st.session_state.chat = None
-
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -97,71 +119,25 @@ if "mode" not in st.session_state:
 if "auto_speak" not in st.session_state:
     st.session_state.auto_speak = False
 
-# Fallback responses if AI fails
-FALLBACK_RESPONSES = [
-    "I'd love to chat with you, but there seems to be an issue with my AI capabilities. Please check your API key settings!",
-    "Hello! I'm having trouble accessing my AI features at the moment. Could you verify your API key is correctly set up?",
-    "I'm here to help, but I need a proper API key to function. Please check your Streamlit secrets configuration.",
-    "Thanks for reaching out! There appears to be a configuration issue. Make sure your Google API key is properly set up."
-]
-
-# Personality prompts
-FRIENDLY_PROMPT = """You are Sammy, a warm, empathetic AI friend. Be supportive, curious, and understanding. 
-Respond in a conversational, friendly tone. Keep responses under 3 sentences when possible."""
-
-PROJECT_PROMPT = """You are Sammy, a creative project partner. Be analytical, structured, and encouraging. 
-Help break down complex tasks and provide practical advice."""
-
-def get_ai_response(prompt):
-    """Get response from Gemini with fallback"""
-    if not st.session_state.model:
-        # Return fallback response if model isn't available
-        return FALLBACK_RESPONSES[len(st.session_state.messages) % len(FALLBACK_RESPONSES)]
-    
-    try:
-        response = st.session_state.chat.send_message(prompt)
-        return response.text
-    except Exception as e:
-        return f"I apologize, but I encountered an error: {str(e)}. Please check your API configuration."
-
 # Main app
 st.title("🤖 Sammy - Your AI Companion")
-st.markdown("Chat with your AI friend! **Now with Text-to-Speech!**")
+st.markdown("Chat with your AI friend! **No API key needed!**")
 
-# Show API status
-if not st.session_state.model:
-    st.error("""
-    **🔧 Setup Required:**
-    1. Go to your Streamlit app settings
-    2. Click on **Secrets**
-    3. Add your Google API key:
-    ```toml
-    GOOGLE_API_KEY = "your_actual_api_key_here"
-    ```
-    4. Redeploy the app
-    """)
-
-# Mode selection (only show if model might work)
+# Mode selection
+st.markdown("### 🎯 Choose Conversation Mode")
 col1, col2 = st.columns(2)
 with col1:
-    if st.button("💬 Friendly Mode", use_container_width=True, key="btn_friendly"):
+    if st.button("💬 **Friendly Chat Mode**", use_container_width=True, key="btn_friendly"):
         st.session_state.mode = "friendly"
         st.session_state.messages = []
-        if st.session_state.chat:
-            st.session_state.chat.history = []
         st.rerun()
 with col2:
-    if st.button("💻 Project Mode", use_container_width=True, key="btn_project"):
+    if st.button("💻 **Project Helper Mode**", use_container_width=True, key="btn_project"):
         st.session_state.mode = "project"
         st.session_state.messages = []
-        if st.session_state.chat:
-            st.session_state.chat.history = []
         st.rerun()
 
-if st.session_state.model:
-    st.success(f"Mode: {'💬 Friendly' if st.session_state.mode == 'friendly' else '💻 Project'}")
-else:
-    st.warning("AI model not initialized - using fallback responses")
+st.success(f"**Current Mode:** {'💬 Friendly Chat' if st.session_state.mode == 'friendly' else '💻 Project Helper'}")
 
 # Text Input Section
 st.markdown("---")
@@ -187,16 +163,11 @@ if st.session_state.get('process_input'):
     # Add user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     
-    # Get response (AI or fallback)
+    # Get Sammy's response
     with st.spinner("Sammy is thinking..."):
-        if st.session_state.model:
-            system_prompt = FRIENDLY_PROMPT if st.session_state.mode == "friendly" else PROJECT_PROMPT
-            full_prompt = f"{system_prompt}\n\nUser: {prompt}"
-            response = get_ai_response(full_prompt)
-        else:
-            response = get_ai_response(prompt)  # This will use fallback
+        response = get_sammy_response(prompt, st.session_state.mode, st.session_state.messages)
         
-        # Add response
+        # Add Sammy's response
         st.session_state.messages.append({"role": "assistant", "content": response})
         
         # Auto-speak if enabled
@@ -208,10 +179,10 @@ if st.session_state.get('process_input'):
 
 # Text-to-Speech Controls
 st.markdown("---")
-st.subheader("🔊 Text-to-Speech")
+st.subheader("🔊 Text-to-Speech Settings")
 
 # Auto-speak toggle
-auto_speak = st.toggle("Automatically speak responses", 
+auto_speak = st.toggle("Automatically speak Sammy's responses", 
                       value=st.session_state.auto_speak,
                       key="toggle_auto_speak")
 if auto_speak != st.session_state.auto_speak:
@@ -219,16 +190,16 @@ if auto_speak != st.session_state.auto_speak:
 
 # Test TTS button
 if st.button("🔊 Test Text-to-Speech", key="btn_test_tts"):
-    test_text = "Hello! This is Sammy's text-to-speech test. If you can hear this, it's working!"
+    test_text = "Hello! This is Sammy's text-to-speech test. If you can hear this, it's working perfectly!"
     speak_text(test_text)
-    st.success("Testing text-to-speech... You should hear a message.")
+    st.success("Testing text-to-speech... You should hear a message!")
 
 # Display conversation
 st.markdown("---")
-st.subheader("📝 Conversation")
+st.subheader("📝 Conversation History")
 
 if not st.session_state.messages:
-    st.info("No messages yet. Start a conversation above!")
+    st.info("No messages yet. Start a conversation above! Try saying 'hello' or 'I need help with a project'")
 else:
     for i, message in enumerate(st.session_state.messages):
         if message["role"] == "user":
@@ -245,44 +216,61 @@ else:
 with st.sidebar:
     st.header("⚙️ Settings")
     
-    if st.button("🗑️ Clear Chat", use_container_width=True, key="btn_clear"):
+    if st.button("🗑️ Clear Chat History", use_container_width=True, key="btn_clear"):
         st.session_state.messages = []
-        if st.session_state.chat:
-            st.session_state.chat.history = []
+        st.success("Chat history cleared!")
         st.rerun()
     
     st.header("📊 Session Info")
     st.write(f"**Messages:** {len(st.session_state.messages)}")
-    st.write(f"**Mode:** {st.session_state.mode.title()}")
-    st.write(f"**Auto-speak:** {'✅ On' if st.session_state.auto_speak else '❌ Off'}")
-    st.write(f"**AI Status:** {'✅ Ready' if st.session_state.model else '❌ Needs Setup'}")
+    st.write(f"**Mode:** {'Friendly Chat' if st.session_state.mode == 'friendly' else 'Project Helper'}")
+    st.write(f"**Auto-speak:** {'✅ Enabled' if st.session_state.auto_speak else '❌ Disabled'}")
     
-    st.header("🔑 API Setup")
+    st.header("💡 Conversation Tips")
     st.markdown("""
-    **If AI isn't working:**
-    1. Get a Google AI API key
-    2. Add to Streamlit Secrets:
-    ```toml
-    GOOGLE_API_KEY = "your_key_here"
-    ```
-    3. Redeploy the app
+    **Try saying:**
+    - *Hello* or *Hi*
+    - *How are you?*
+    - *I'm feeling [sad/happy/stressed]*
+    - *I need help with a project*
+    - *I have an idea*
+    - *I'm stuck on something*
+    
+    **Friendly Mode:** Emotional support, casual chat
+    **Project Mode:** Planning, brainstorming, problem-solving
     """)
 
 # Instructions
 st.markdown("---")
-st.info("""
-**💡 Troubleshooting Guide:**
+st.success("""
+**🎉 No API Key Required!** This version of Sammy works completely offline using rule-based responses.
 
-**If you see model errors:**
-- Check your Google AI API key is valid
-- Ensure you have access to Gemini models
-- Try redeploying the app
-
-**If text-to-speech doesn't work:**
-- Use **Chrome** or **Edge** browser
+**🔊 Text-to-Speech Tips:**
+- Use **Chrome** or **Edge** for best results
 - Allow **audio permissions** when prompted
-- Check your **speaker/headphone** volume
-- Click the **Test button** above
+- Click **🔊 buttons** to hear messages
+- Enable **auto-speak** for automatic responses
 
-**Quick fix:** The app will work with fallback responses even if the AI model fails!
+**💬 Conversation Starters:**
+- "Hello Sammy!"
+- "I'm feeling happy today"
+- "I need help planning a project"
+- "What can you do?"
 """)
+
+# JavaScript for better TTS handling
+st.markdown("""
+<script>
+// Additional TTS support
+function checkTTSSupport() {
+    if ('speechSynthesis' in window) {
+        console.log('Text-to-speech supported');
+        return true;
+    } else {
+        console.log('Text-to-speech not supported');
+        return false;
+    }
+}
+checkTTSSupport();
+</script>
+""", unsafe_allow_html=True)
