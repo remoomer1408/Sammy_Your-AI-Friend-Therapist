@@ -12,7 +12,7 @@ def get_response(message):
     if any(word in message_lower for word in ['hello', 'hi', 'hey']):
         return "Hello there! 😊 How can I help you today?"
     
-    elif 'ai' in message_lower and 'project' in message_lower:
+    elif 'ai' in message_lower and ('project' in message_lower or 'idea' in message_lower):
         return """Great question! 🤖 Here are some AI project ideas in Python:
 
 1. **Chatbot Assistant** - Like me! A conversational AI
@@ -23,7 +23,7 @@ def get_response(message):
 
 Which one interests you most? I can explain any in detail! 🚀"""
     
-    elif 'python' in message_lower and 'project' in message_lower:
+    elif 'python' in message_lower and ('project' in message_lower or 'idea' in message_lower):
         return """🐍 Python project ideas:
 
 1. **Task Manager App** - Organize your daily activities
@@ -57,14 +57,17 @@ What type of project are you thinking about?"""
 if 'messages' not in st.session_state:
     st.session_state.messages = []
 
+if 'current_input' not in st.session_state:
+    st.session_state.current_input = ""
+
 st.title("🤖 Sammy - Your AI Companion")
 st.markdown("Chat with your friendly AI friend!")
 
-# Simple text input - this will definitely work
-user_input = st.text_input("💬 Talk to Sammy:", key="user_input")
+# Simple text input - correct way to handle it
+user_input = st.text_input("💬 Talk to Sammy:", value=st.session_state.current_input, key="user_input")
 
-# Process the input when user presses Enter or clicks anywhere
-if user_input:
+# Process the input when we have new input
+if user_input and user_input != st.session_state.current_input:
     # Add user message
     st.session_state.messages.append({"role": "user", "content": user_input})
     
@@ -72,8 +75,8 @@ if user_input:
     response = get_response(user_input)
     st.session_state.messages.append({"role": "assistant", "content": response})
     
-    # Clear the input by resetting the key
-    st.session_state.user_input = ""
+    # Clear the input by updating session state
+    st.session_state.current_input = ""
     st.rerun()
 
 # Display conversation
@@ -96,6 +99,7 @@ else:
 # Clear button
 if st.button("🗑️ Clear Chat"):
     st.session_state.messages = []
+    st.session_state.current_input = ""
     st.rerun()
 
 # Test button to verify it works
